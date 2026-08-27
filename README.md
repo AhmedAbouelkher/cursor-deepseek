@@ -21,6 +21,7 @@ This proxy was created to enable Cursor IDE users to leverage DeepSeek's, OpenRo
 - DeepSeek reasoning effort control (`deepseek-chat$low`, `$high`, `$max`)
 - DeepSeek thinking mode (e.g. `deepseek-chat$high$thinking`)
 - DeepSeek Coder model support (`-model coder`)
+- Cross-platform executables for Windows, Linux, and macOS (`build_all.sh`)
 - Graceful shutdown
 
 ## Prerequisites
@@ -80,6 +81,30 @@ docker run -p 9000:9000 --env-file .env cursor-openrouter
 # OR for Ollama
 docker run -p 9000:9000 --env-file .env cursor-ollama
 ```
+
+### Building Executables
+
+To build standalone executables for all three variants (deepseek, openrouter, ollama) across Windows, Linux, and macOS:
+
+```bash
+./build_all.sh
+```
+
+The binaries are written to `dist/`:
+
+```
+dist/
+├── deepseek_windows_amd64.exe
+├── deepseek_linux_amd64
+├── deepseek_darwin_amd64
+├── deepseek_darwin_arm64
+├── openrouter_windows_amd64.exe
+├── ...
+└── ollama_darwin_arm64
+```
+
+- macOS builds include both Intel (`amd64`) and Apple Silicon (`arm64`)
+- Optionally override the version tag baked into the binary: `VERSION=1.2.3 ./build_all.sh`
 
 ## Configuration
 
