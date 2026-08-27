@@ -5,13 +5,19 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"context"
+	"cursor-deepseek/tunnel"
 	"encoding/json"
+	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/andybalholm/brotli"
@@ -28,6 +34,9 @@ const (
 )
 
 var deepseekAPIKey string
+var modelFlag string
+var applicationPort int
+var openTunnel bool
 
 // Configuration structure
 type Config struct {
@@ -38,6 +47,7 @@ type Config struct {
 var activeConfig Config
 
 func init() {
+
 	// Load .env file
 	if err := godotenv.Load(); err != nil {
 		log.Printf("Warning: .env file not found or error loading it: %v", err)
@@ -48,36 +58,6 @@ func init() {
 	if deepseekAPIKey == "" {
 		log.Fatal("DEEPSEEK_API_KEY environment variable is required")
 	}
-
-	// Parse command line arguments
-	modelFlag := "chat" // default value
-	for i, arg := range os.Args {
-		if arg == "-model" && i+1 < len(os.Args) {
-			modelFlag = os.Args[i+1]
-		}
-	}
-
-	// Configure the active endpoint and model based on the flag
-	switch modelFlag {
-	case "coder":
-		activeConfig = Config{
-			endpoint: deepseekBetaEndpoint,
-			model:    deepseekCoderModel,
-		}
-	case "chat":
-		activeConfig = Config{
-			endpoint: deepseekEndpoint,
-			model:    deepseekChatModel,
-		}
-	default:
-		log.Printf("Invalid model specified: %s. Using default chat model.", modelFlag)
-		activeConfig = Config{
-			endpoint: deepseekEndpoint,
-			model:    deepseekChatModel,
-		}
-	}
-
-	log.Printf("Initialized with model: %s using endpoint: %s", activeConfig.model, activeConfig.endpoint)
 }
 
 type ReasoningEffort string
@@ -301,18 +281,75 @@ type DeepSeekRequest struct {
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 
+	flag.BoolVar(&openTunnel, "tunnel", false, "Open a Cloudflare tunnel")
+	flag.StringVar(&modelFlag, "model", "chat", "The model to use")
+	flag.IntVar(&applicationPort, "port", 9000, "The port to use")
+	flag.Parse()
+
+	// Configure the active endpoint and model based on the flag
+	switch modelFlag {
+	case "coder":
+		activeConfig = Config{
+			endpoint: deepseekBetaEndpoint,
+			model:    deepseekCoderModel,
+		}
+	case "chat":
+		activeConfig = Config{
+			endpoint: deepseekEndpoint,
+			model:    deepseekChatModel,
+		}
+	default:
+		log.Printf("Invalid model specified: %s. Using default chat model.", modelFlag)
+		activeConfig = Config{
+			endpoint: deepseekEndpoint,
+			model:    deepseekChatModel,
+		}
+	}
+
+	log.Printf("Initialized with model: %s using endpoint: %s", activeConfig.model, activeConfig.endpoint)
+
 	server := &http.Server{
-		Addr:    ":9000",
+		Addr:    fmt.Sprintf(":%d", applicationPort),
 		Handler: http.HandlerFunc(proxyHandler),
 	}
 
 	// Enable HTTP/2 support
 	http2.ConfigureServer(server, &http2.Server{})
 
-	log.Printf("Starting proxy server on %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("Server failed: %v", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if openTunnel {
+		go func() {
+			tunnelURL, err := tunnel.CreateCloudflareTunnel(ctx, applicationPort)
+			if err != nil {
+				log.Printf("Failed to create tunnel: %v", err)
+				return
+			}
+			log.Printf("Public tunnel URL: %s", tunnelURL)
+		}()
+	} else {
+		log.Println("No Tunnel is setup, to use a tunnel, run with the -tunnel flag")
 	}
+
+	go func() {
+		log.Printf("Starting proxy server on %s", server.Addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("Server failed: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("Shutting down gracefully...")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Fatalf("Server forced to shutdown: %v", err)
+	}
+
+	log.Println("Server exited properly")
 }
 
 func enableCors(w http.ResponseWriter) {

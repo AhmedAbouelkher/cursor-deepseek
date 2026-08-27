@@ -16,20 +16,25 @@ This proxy was created to enable Cursor IDE users to leverage DeepSeek's, OpenRo
 - Compression support (Brotli, Gzip, Deflate)
 - Compatible with OpenAI API client libraries
 - API key validation for secure access
-- Docker container support with multi-variant builds
+- Docker container support with multi-variant builds (deepseek, openrouter, ollama)
+- Built-in Cloudflare Quick Tunnel (`-tunnel`) — no external binary required
+- DeepSeek reasoning effort control (`deepseek-chat$low`, `$high`, `$max`)
+- DeepSeek thinking mode (e.g. `deepseek-chat$high$thinking`)
+- DeepSeek Coder model support (`-model coder`)
+- Graceful shutdown
 
 ## Prerequisites
 
 - Cursor Pro Subscription
-- Go 1.19 or higher
-- DeepSeek or OpenRouter API key
-- Ollama server running locally (optional, for Ollama support)
-- Public Endpoint
+- Go 1.26 or higher
+- DeepSeek API key (required for `proxy.go`)
+- OpenRouter API key or local Ollama server (for the corresponding variants)
 
 ## Installation
 
 1. Clone the repository
 2. Install dependencies:
+
 ```bash
 go mod download
 ```
@@ -40,26 +45,34 @@ The proxy supports both DeepSeek and OpenRouter variants. Choose the appropriate
 
 1. Build the Docker image:
    - For DeepSeek (default):
+
    ```bash
    docker build -t cursor-deepseek .
    ```
+
    - For OpenRouter:
+
    ```bash
    docker build -t cursor-openrouter --build-arg PROXY_VARIANT=openrouter .
    ```
+
    - For Ollama:
+
    ```bash
    docker build -t cursor-ollama --build-arg PROXY_VARIANT=ollama .
    ```
 
 2. Configure environment variables:
    - Copy the example configuration:
+
    ```bash
    cp .env.example .env
    ```
+
    - Edit `.env` and add your API key (either DeepSeek or OpenRouter)
 
 3. Run the container:
+
 ```bash
 docker run -p 9000:9000 --env-file .env cursor-deepseek
 # OR for OpenRouter
@@ -73,11 +86,13 @@ docker run -p 9000:9000 --env-file .env cursor-ollama
 The repository includes an `.env.example` file showing the required environment variables. To configure:
 
 1. Copy the example configuration:
+
 ```bash
 cp .env.example .env
 ```
 
-2. Edit `.env` and add your API key:
+1. Edit `.env` and add your API key:
+
 ```bash
 # For DeepSeek
 DEEPSEEK_API_KEY=your_deepseek_api_key_here
@@ -94,50 +109,75 @@ Note: Only configure ONE of the API keys based on which variant you're using.
 ## Usage
 
 1. Start the proxy server:
+
 ```bash
 go run proxy.go
-# OR you can specify a model:
-go run proxy.go -model coder
-# OR
-go run proxy.go -model chat
+# Specify the DeepSeek model variant:
+go run proxy.go -model chat   # deepseek-chat (default)
+go run proxy.go -model coder  # deepseek-coder (beta endpoint)
+# Change the port:
+go run proxy.go -port 8080
+# Open a public Cloudflare Quick Tunnel automatically:
+go run proxy.go -tunnel
 # OR for OpenRouter
-go run proxy-openrouter.go
+go run openrouter/proxy-openrouter.go
 # OR for Ollama
-go run proxy-ollama.go
+go run ollama/proxy-ollama.go
 ```
 
 The server will start on port 9000 by default.
 
-2. Use the proxy with your OpenAI API clients by setting the base URL to `http://your-public-endpoint:9000/v1`
-
+1. Use the proxy with your OpenAI API clients by setting the base URL to `http://your-public-endpoint:9000/v1`
 
 ## Exposing the Endpoint Publicly
 
-You can expose your local proxy server to the internet using ngrok or similar services. This is useful when you need to access the proxy from external applications or different networks.
+The proxy includes a built-in Cloudflare Quick Tunnel, so you can expose your local server without installing anything.
 
-### Using ngrok
+### Built-in Cloudflare Quick Tunnel
 
-1. Install ngrok from https://ngrok.com/download
+Start the proxy with the `-tunnel` flag:
+
+```bash
+go run proxy.go -tunnel
+```
+
+A random public URL (e.g. `https://random-subdomain.trycloudflare.com`) is created automatically and logged at startup.
+
+Use this URL as your OpenAI API base URL in Cursor's settings:
+
+```
+https://random-subdomain.trycloudflare.com/v1
+```
+
+### Alternatives
+
+You can also expose your local proxy server to the internet using ngrok or similar services. This is useful when you need to access the proxy from external applications or different networks.
+
+#### Using ngrok
+
+1. Install ngrok from <https://ngrok.com/download>
 
 2. Start your proxy server locally (it will run on port 9000)
 
 3. In a new terminal, run ngrok:
+
 ```bash
 ngrok http 9000
 ```
 
-4. ngrok will provide you with a public URL (e.g., https://your-unique-id.ngrok.io)
+1. ngrok will provide you with a public URL (e.g., <https://your-unique-id.ngrok.io>)
 
-5. Use this URL as your OpenAI API base URL in Cursor's settings:
+2. Use this URL as your OpenAI API base URL in Cursor's settings:
+
 ```
 https://your-unique-id.ngrok.io/v1
 ```
 
-### Alternative Methods
+#### Other Services
 
 You can also use other services to expose your endpoint:
 
-1. **Cloudflare Tunnel**: 
+1. **Cloudflare Tunnel**:
    - Install cloudflared
    - Run: `cloudflared tunnel --url http://localhost:9000`
 
@@ -147,7 +187,6 @@ You can also use other services to expose your endpoint:
 
 Remember to always secure your endpoint appropriately when exposing it to the internet.
 
-
 ### Supported Endpoints
 
 - `/v1/chat/completions` - Chat completions endpoint
@@ -155,15 +194,23 @@ Remember to always secure your endpoint appropriately when exposing it to the in
 
 ### Model Mapping
 
-- `gpt-4o` maps to DeepSeek's GPT-4o equivalent model
-- `deepseek-chat` for DeepSeek's native chat model
-- `deepseek/deepseek-chat` for OpenRouter's DeepSeek model
+The proxy maps every requested model to `deepseek-chat` internally and rewrites the model name in responses back to what you requested, so any model name you pick in Cursor works.
+
+- `deepseek-chat` — DeepSeek's native chat model (default)
+- `deepseek-coder` — DeepSeek Coder, via `-model coder` (beta endpoint)
+- `deepseek-chat$low` / `$high` / `$max` — DeepSeek reasoning effort control
+- `deepseek-chat$high$thinking` — enables DeepSeek thinking mode
+
+`/v1/models` returns the available variants: `deepseek-chat`, `deepseek-chat$low`, `deepseek-chat$high`, and `deepseek-chat$max`.
 
 ## Dependencies
 
 - `github.com/andybalholm/brotli` - Brotli compression support
 - `github.com/joho/godotenv` - Environment variable management
 - `golang.org/x/net` - HTTP/2 support
+- `github.com/cloudflare/cloudflared` - Embedded Cloudflare Quick Tunnel
+- `github.com/google/uuid` - UUID parsing for tunnel credentials
+- `github.com/pkg/errors` - Error wrapping
 
 ## Security
 
