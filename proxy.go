@@ -1,6 +1,3 @@
-//go:build deepseek
-// +build deepseek
-
 package main
 
 import (
@@ -83,6 +80,22 @@ func init() {
 	log.Printf("Initialized with model: %s using endpoint: %s", activeConfig.model, activeConfig.endpoint)
 }
 
+type ReasoningEffort string
+
+const (
+	ReasoningEffortDefault ReasoningEffort = ""
+	ReasoningEffortLow     ReasoningEffort = "low"
+	ReasoningEffortHigh    ReasoningEffort = "high"
+	ReasoningEffortMax     ReasoningEffort = "max"
+)
+
+var reasoningEffortMap = map[ReasoningEffort]string{
+	ReasoningEffortLow:     "low",
+	ReasoningEffortHigh:    "high",
+	ReasoningEffortMax:     "max",
+	ReasoningEffortDefault: "",
+}
+
 // Models response structure
 type ModelsResponse struct {
 	Object string  `json:"object"`
@@ -106,6 +119,22 @@ type ChatRequest struct {
 	ToolChoice  interface{} `json:"tool_choice,omitempty"`
 	Temperature *float64    `json:"temperature,omitempty"`
 	MaxTokens   *int        `json:"max_tokens,omitempty"`
+}
+
+func (chatReq ChatRequest) ExtractReasoningEffort() (string, ReasoningEffort, bool) {
+	model := chatReq.Model
+	modelSegments := strings.Split(model, "$")
+	if len(modelSegments) < 2 {
+		return model, ReasoningEffortDefault, false
+	}
+	modelName := modelSegments[0]
+	reasoningEffortStr := modelSegments[1]
+	reasoningEffort, ok := reasoningEffortMap[ReasoningEffort(reasoningEffortStr)]
+	if !ok {
+		return model, ReasoningEffortDefault, false
+	}
+	hasThinking := len(modelSegments) > 2
+	return modelName, ReasoningEffort(reasoningEffort), hasThinking
 }
 
 type Message struct {
@@ -253,14 +282,20 @@ func truncateString(s string, maxLen int) string {
 }
 
 // DeepSeek request structure
+
+type Thinking struct {
+	Type string `json:"type"` // enabled/disabled
+}
 type DeepSeekRequest struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages"`
-	Stream      bool      `json:"stream"`
-	Temperature float64   `json:"temperature,omitempty"`
-	MaxTokens   int       `json:"max_tokens,omitempty"`
-	Tools       []Tool    `json:"tools,omitempty"`
-	ToolChoice  string    `json:"tool_choice,omitempty"`
+	Model           string          `json:"model"`
+	Messages        []Message       `json:"messages"`
+	Stream          bool            `json:"stream"`
+	Temperature     float64         `json:"temperature,omitempty"`
+	MaxTokens       int             `json:"max_tokens,omitempty"`
+	Tools           []Tool          `json:"tools,omitempty"`
+	ToolChoice      string          `json:"tool_choice,omitempty"`
+	ReasoningEffort ReasoningEffort `json:"reasoning_effort,omitempty"`
+	Thinking        Thinking        `json:"thinking,omitempty"`
 }
 
 func main() {
@@ -291,7 +326,7 @@ func enableCors(w http.ResponseWriter) {
 func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received request: %s %s", r.Method, r.URL.Path)
 
-	if r.Method == "OPTIONS" {
+	if r.Method == http.MethodOptions {
 		enableCors(w)
 		return
 	}
@@ -314,7 +349,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Handle /v1/models endpoint
-	if r.URL.Path == "/v1/models" && r.Method == "GET" {
+	if r.URL.Path == "/v1/models" && r.Method == http.MethodGet {
 		log.Printf("Handling /v1/models request")
 		handleModelsRequest(w)
 		return
@@ -376,18 +411,24 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Requested model: %s", chatReq.Model)
 
-	// Store original model name for response
-	originalModel := chatReq.Model
-	
+	originalModel, reasoningEffort, hasThinking := chatReq.ExtractReasoningEffort()
+
 	// Convert to deepseek-chat internally
 	chatReq.Model = deepseekChatModel
-	log.Printf("Model converted to: %s (original: %s)", deepseekChatModel, originalModel)
+	log.Printf("Model converted to: %s (original: %s, reasoning effort: %s)", deepseekChatModel, originalModel, reasoningEffort)
 
 	// Convert to DeepSeek request format
 	deepseekReq := DeepSeekRequest{
 		Model:    deepseekChatModel,
 		Messages: convertMessages(chatReq.Messages),
 		Stream:   chatReq.Stream,
+		Thinking: Thinking{Type: "disabled"},
+	}
+	if reasoningEffort != ReasoningEffortDefault {
+		deepseekReq.ReasoningEffort = reasoningEffort
+	}
+	if hasThinking {
+		deepseekReq.Thinking = Thinking{Type: "enabled"}
 	}
 
 	// Copy optional parameters if present
@@ -739,18 +780,23 @@ func copyHeaders(dst, src http.Header) {
 
 func handleModelsRequest(w http.ResponseWriter) {
 	log.Printf("Handling models request")
-	
+
 	// Get the requested model from the query parameters
 	response := ModelsResponse{
 		Object: "list",
-		Data: []Model{
-			{
-				ID:      deepseekChatModel,
-				Object:  "model",
-				Created: time.Now().Unix(),
-				OwnedBy: "deepseek",
-			},
-		},
+		Data:   []Model{},
+	}
+	for reasoningEffort := range reasoningEffortMap {
+		id := deepseekChatModel
+		if reasoningEffort != ReasoningEffortDefault {
+			id = fmt.Sprintf("%s$%s", deepseekChatModel, reasoningEffort)
+		}
+		response.Data = append(response.Data, Model{
+			ID:      id,
+			Object:  "model",
+			Created: time.Now().Unix(),
+			OwnedBy: "deepseek",
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
