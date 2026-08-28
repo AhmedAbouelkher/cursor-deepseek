@@ -37,6 +37,7 @@ var deepseekAPIKey string
 var modelFlag string
 var applicationPort int
 var openTunnel bool
+var verbose bool
 
 // Configuration structure
 type Config struct {
@@ -284,6 +285,7 @@ func main() {
 	flag.BoolVar(&openTunnel, "tunnel", false, "Open a Cloudflare tunnel")
 	flag.StringVar(&modelFlag, "model", "chat", "The model to use")
 	flag.IntVar(&applicationPort, "port", 9000, "The port to use")
+	flag.BoolVar(&verbose, "verbose", false, "Verbose logging")
 	flag.Parse()
 
 	// Configure the active endpoint and model based on the flag
@@ -508,7 +510,11 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("========== Request to DeepSeek ==========")
-	log.Printf("Modified request body: %s", string(modifiedBody))
+	if verbose {
+		log.Printf("Modified request body: %s", string(modifiedBody))
+	} else {
+		log.Printf("Modified request body: <verbose logging disabled>")
+	}
 	log.Printf("==========================================")
 
 	// Create the proxy request to DeepSeek
