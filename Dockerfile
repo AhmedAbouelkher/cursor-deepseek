@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:latest AS builder
 
 # Add build argument to specify which proxy to build
 ARG PROXY_VARIANT=deepseek
@@ -21,11 +21,11 @@ COPY . .
 
 # Build the application based on the selected variant
 RUN if [ "$PROXY_VARIANT" = "openrouter" ]; then \
-        CGO_ENABLED=0 GOOS=linux go build -o proxy ./openrouter/proxy-openrouter.go; \
+    CGO_ENABLED=0 GOOS=linux go build -o proxy ./openrouter/proxy-openrouter.go; \
     elif [ "$PROXY_VARIANT" = "ollama" ]; then \
-        CGO_ENABLED=0 GOOS=linux go build -o proxy ./ollama/proxy-ollama.go; \
+    CGO_ENABLED=0 GOOS=linux go build -o proxy ./ollama/proxy-ollama.go; \
     else \
-        CGO_ENABLED=0 GOOS=linux go build -o proxy ./proxy.go; \
+    CGO_ENABLED=0 GOOS=linux go build -o proxy ./proxy.go; \
     fi
 
 # Final stage
