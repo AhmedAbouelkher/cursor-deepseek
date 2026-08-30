@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
-	"github.com/joho/godotenv"
 	"golang.org/x/net/http2"
 )
 
@@ -33,7 +32,6 @@ const (
 	gpt4oModel           = "gpt-4o"
 )
 
-var deepseekAPIKey string
 var modelFlag string
 var applicationPort int
 var openTunnel bool
@@ -46,20 +44,6 @@ type Config struct {
 }
 
 var activeConfig Config
-
-func init() {
-
-	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Printf("Warning: .env file not found or error loading it: %v", err)
-	}
-
-	// Get DeepSeek API key
-	deepseekAPIKey = os.Getenv("DEEPSEEK_API_KEY")
-	if deepseekAPIKey == "" {
-		log.Fatal("DEEPSEEK_API_KEY environment variable is required")
-	}
-}
 
 type ReasoningEffort string
 
@@ -381,9 +365,9 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userAPIKey := strings.TrimPrefix(authHeader, "Bearer ")
-	if userAPIKey != deepseekAPIKey {
-		log.Printf("Invalid API key provided")
-		http.Error(w, "Invalid API key", http.StatusUnauthorized)
+	if userAPIKey == "" {
+		log.Printf("No API key provided")
+		http.Error(w, "No API key provided", http.StatusUnauthorized)
 		return
 	}
 
@@ -535,7 +519,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	copyHeaders(proxyReq.Header, r.Header)
 
 	// Set DeepSeek API key and content type
-	proxyReq.Header.Set("Authorization", "Bearer "+deepseekAPIKey)
+	proxyReq.Header.Set("Authorization", "Bearer "+userAPIKey)
 	proxyReq.Header.Set("Content-Type", "application/json")
 	if chatReq.Stream {
 		proxyReq.Header.Set("Accept", "text/event-stream")
